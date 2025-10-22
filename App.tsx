@@ -90,6 +90,9 @@ const COST_PER_SECOND = {
   HEYGEN: 0.25 // 1.25 credits per 5 seconds of video
 };
 
+// Check if running in AI Studio
+const isAiStudio = !!window.aistudio;
+
 export default function App() {
   const [maleImage, setMaleImage] = useState<ImageFile | null>(null);
   const [femaleImage, setFemaleImage] = useState<ImageFile | null>(null);
@@ -100,7 +103,12 @@ export default function App() {
   const [generationMessage, setGenerationMessage] = useState("");
   const [resultVideoUrl, setResultVideoUrl] = useState("");
   const [history, setHistory] = useState<HistoryItem[]>([]);
-  const [isKeySelected, setIsKeySelected] = useState(false);
+  
+  // Environment-aware API key state
+  const [isKeySelected, setIsKeySelected] = useState(false); // For AI Studio flow
+  const [geminiApiKey, setGeminiApiKey] = useState<string | null>(null); // For non-AI Studio flow
+  const [isApiKeyModalOpen, setIsApiKeyModalOpen] = useState(false);
+  const [tempApiKey, setTempApiKey] = useState("");
   
   // New state for audio generation
   const [sourceType, setSourceType] = useState<'upload' | 'url' | 'generate'>('generate');
@@ -175,19 +183,41 @@ export default function App() {
   }, [audioDuration, videoEngine, updateCost]);
 
 
+  // Environment-aware key check on load
   useEffect(() => {
     const checkApiKey = async () => {
-      try {
-        if (window.aistudio && (await window.aistudio.hasSelectedApiKey())) {
-          setIsKeySelected(true);
+      if (isAiStudio) {
+        try {
+          if (await window.aistudio.hasSelectedApiKey()) {
+            setIsKeySelected(true);
+          }
+        } catch (e) {
+          console.error("Failed to check for AI Studio key:", e);
         }
-      } catch (e) {
-        console.error("Failed to check for API key:", e);
-        setIsKeySelected(false);
+      } else {
+        const storedKey = sessionStorage.getItem('gemini_api_key');
+        if (storedKey) {
+          setGeminiApiKey(storedKey);
+          setTempApiKey(storedKey);
+        }
       }
     };
     checkApiKey();
   }, []);
+
+  const getApiKey = () => {
+    if (isAiStudio) {
+      return process.env.API_KEY;
+    }
+    return geminiApiKey;
+  };
+
+  const isApiKeyReady = () => {
+      if (isAiStudio) {
+          return isKeySelected;
+      }
+      return !!geminiApiKey;
+  }
 
   const handleAddCredits = (amount: number) => {
     setCredits(prev => prev + amount);
@@ -205,6 +235,16 @@ export default function App() {
     } catch (error) {
         console.error("Error opening API key selection:", error);
         alert("Could not open the API key selector. Please try again.");
+    }
+  };
+
+  const handleSaveApiKey = () => {
+    if (tempApiKey.trim()) {
+      setGeminiApiKey(tempApiKey.trim());
+      sessionStorage.setItem('gemini_api_key', tempApiKey.trim());
+      setIsApiKeyModalOpen(false);
+    } else {
+      alert("Please enter a valid API key.");
     }
   };
 
@@ -230,8 +270,8 @@ export default function App() {
       alert("Please enter a topic for the script.");
       return;
     }
-    if (!isKeySelected) {
-      alert("Please select an API key first.");
+    if (!isApiKeyReady()) {
+      alert("Please set your Google API key first.");
       return;
     }
 
@@ -239,7 +279,10 @@ export default function App() {
     setSourceScript('');
 
     try {
-      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+      const apiKey = getApiKey();
+      if (!apiKey) throw new Error("API Key is missing.");
+
+      const ai = new GoogleGenAI({ apiKey });
       const modelPrompt = `You are a podcast script writer. Write a conversational podcast script for two hosts, Joe and Jane, discussing the topic: "${topicPrompt}". The script should be engaging, informative, and around 300-400 words. Use up-to-date information from the web to inform the content. Format the script strictly with 'Joe:' and 'Jane:' prefixes for their respective lines. Do not include any other text, titles, or stage directions.`;
 
       const response = await ai.models.generateContent({
@@ -256,9 +299,10 @@ export default function App() {
     } catch (error: any) {
       console.error("Script generation failed:", error);
       alert(`An error occurred during script generation: ${error.message}`);
-      if (error.message?.includes("Requested entity was not found")) {
-        setIsKeySelected(false);
-        alert("Your API key is invalid. Please select a valid key.");
+      if (error.message?.includes("API key not valid")) {
+        if (isAiStudio) setIsKeySelected(false);
+        else setGeminiApiKey(null);
+        alert("Your API key is invalid. Please provide a valid key.");
       }
     } finally {
       setIsGeneratingScript(false);
@@ -271,8 +315,8 @@ export default function App() {
           alert("Please provide a source: upload a file, paste a URL, or generate a script from a prompt.");
           return;
       }
-      if (!isKeySelected) {
-          alert("Please select an API key first.");
+      if (!isApiKeyReady()) {
+          alert("Please set your Google API key first.");
           return;
       }
 
@@ -281,13 +325,14 @@ export default function App() {
       setGeneratedAudioBlob(null);
 
       try {
-          const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+          const apiKey = getApiKey();
+          if (!apiKey) throw new Error("API Key is missing.");
+          const ai = new GoogleGenAI({ apiKey });
           
           let transcript = '';
           if (sourceType === 'generate') {
               transcript = sourceScript;
           } else {
-              // Note: Upload/URL audio transcription is not implemented, using sample for demo
               transcript = sampleScriptText;
           }
           
@@ -315,8 +360,8 @@ export default function App() {
               const pcmData = new Int16Array(decodedBytes.buffer);
               const wavBlob = pcmToWav(pcmData, 24000, 1);
               const audioUrl = URL.createObjectURL(wavBlob);
-              setGeneratedAudioBlob(wavBlob); // Save the blob
-              setGeneratedAudioUrl(audioUrl); // Save the URL for local preview
+              setGeneratedAudioBlob(wavBlob);
+              setGeneratedAudioUrl(audioUrl);
           } else {
               throw new Error("Audio generation failed, no data received.");
           }
@@ -324,10 +369,11 @@ export default function App() {
       } catch (error: any) {
           console.error("Audio generation failed:", error);
           alert(`An error occurred during audio generation: ${error.message}`);
-          if (error.message?.includes("Requested entity was not found")) {
-              setIsKeySelected(false);
-              alert("Your API key is invalid. Please select a valid key.");
-          }
+          if (error.message?.includes("API key not valid")) {
+            if (isAiStudio) setIsKeySelected(false);
+            else setGeminiApiKey(null);
+            alert("Your API key is invalid. Please provide a valid key.");
+        }
       } finally {
           setIsGeneratingAudio(false);
       }
@@ -371,8 +417,8 @@ export default function App() {
 };
   
   const startGeneration = useCallback(async () => {
-    if (!isKeySelected) {
-        alert("Please select an API key first.");
+    if (!isApiKeyReady()) {
+        alert("Please set your Google API key first.");
         return;
     }
     if (!maleImage || !femaleImage) {
@@ -400,14 +446,14 @@ export default function App() {
 
     try {
       let finalVideoUrl = "";
+      const apiKey = getApiKey();
+      if (!apiKey) throw new Error("API Key is missing.");
 
       if (videoEngine === 'HEYGEN') {
           const audioBase64 = await blobToBase64(generatedAudioBlob);
-          // NOTE: This implementation uses the first host image for simplicity.
           finalVideoUrl = await generateHeyGenVideo(maleImage, audioBase64);
       } else {
-          // Use Gemini Veo API
-          const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+          const ai = new GoogleGenAI({ apiKey });
           const referenceImagesPayload: VideoGenerationReferenceImage[] = [
               { image: { imageBytes: maleImage.base64, mimeType: maleImage.file.type }, referenceType: VideoGenerationReferenceType.ASSET, },
               { image: { imageBytes: femaleImage.base64, mimeType: femaleImage.file.type }, referenceType: VideoGenerationReferenceType.ASSET, }
@@ -439,8 +485,8 @@ export default function App() {
           setGenerationMessage("Video generated successfully!");
           
           const downloadLink = operation.response?.generatedVideos?.[0]?.video?.uri;
-          if (downloadLink && process.env.API_KEY) {
-              const videoResponse = await fetch(`${downloadLink}&key=${process.env.API_KEY}`);
+          if (downloadLink) {
+              const videoResponse = await fetch(`${downloadLink}&key=${apiKey}`);
               const videoBlob = await videoResponse.blob();
               finalVideoUrl = URL.createObjectURL(videoBlob);
           } else {
@@ -457,19 +503,20 @@ export default function App() {
           date: new Date().toISOString(),
       };
       setHistory(prev => [newItem, ...prev]);
-      setCredits(prev => prev - estimatedCost); // Deduct credits
+      setCredits(prev => prev - estimatedCost);
 
     } catch (error: any) {
         console.error("Video generation failed:", error);
         alert(`An error occurred during video generation: ${error.message}. If using HeyGen, ensure your Vercel function is deployed and the HEYGEN_API_KEY is set.`);
-        if (error.message?.includes("Requested entity was not found")) {
-            setIsKeySelected(false);
-            alert("Your API key is invalid. Please select a valid key.");
+        if (error.message?.includes("API key not valid")) {
+            if (isAiStudio) setIsKeySelected(false);
+            else setGeminiApiKey(null);
+            alert("Your API key is invalid. Please provide a valid key.");
         }
     } finally {
         setIsGenerating(false);
     }
-}, [isKeySelected, maleImage, femaleImage, prompt, projectName, history.length, generatedAudioUrl, generatedAudioBlob, credits, estimatedCost, audioDuration, videoEngine]);
+}, [maleImage, femaleImage, prompt, projectName, history.length, generatedAudioUrl, generatedAudioBlob, credits, estimatedCost, audioDuration, videoEngine, geminiApiKey, isKeySelected]);
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-pink-50 via-purple-50 to-yellow-50 p-4 sm:p-6 font-sans">
@@ -483,9 +530,15 @@ export default function App() {
             </div>
           </div>
           <div className="flex items-center gap-3">
-             <button onClick={handleSelectKey} className={`px-4 py-2 rounded-lg font-semibold transition-all duration-300 ${isKeySelected ? 'bg-green-100 text-green-700' : 'bg-white shadow hover:shadow-md'}`}>
-                {isKeySelected ? 'API Key Selected' : 'Select API Key'}
-            </button>
+             {isAiStudio ? (
+                <button onClick={handleSelectKey} className={`px-4 py-2 rounded-lg font-semibold transition-all duration-300 ${isKeySelected ? 'bg-green-100 text-green-700' : 'bg-white shadow hover:shadow-md'}`}>
+                    {isKeySelected ? 'API Key Selected' : 'Select API Key'}
+                </button>
+             ) : (
+                <button onClick={() => setIsApiKeyModalOpen(true)} className={`px-4 py-2 rounded-lg font-semibold transition-all duration-300 ${geminiApiKey ? 'bg-green-100 text-green-700' : 'bg-white shadow hover:shadow-md'}`}>
+                    {geminiApiKey ? 'Google API Key Set' : 'Set Google API Key'}
+                </button>
+             )}
             <div className="flex items-center gap-2 bg-white rounded-lg px-3 py-2 shadow-sm border">
                 <span role="img" aria-label="credits icon" className="text-yellow-500">💰</span>
                 <span className="font-bold text-gray-800">{credits.toFixed(1)}</span>
@@ -702,6 +755,31 @@ export default function App() {
 
         <footer className="mt-8 text-center text-sm text-gray-600">© {new Date().getFullYear()} PodGen AI — Made with 🎧 + ⚡️</footer>
       </div>
+
+      {isApiKeyModalOpen && (
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4" onClick={() => setIsApiKeyModalOpen(false)}>
+              <div className="bg-white rounded-xl shadow-2xl p-6 sm:p-8 w-full max-w-md" onClick={e => e.stopPropagation()}>
+                  <div className="flex justify-between items-start mb-4">
+                      <h2 className="text-2xl font-extrabold text-gray-800">Set Google API Key</h2>
+                      <button onClick={() => setIsApiKeyModalOpen(false)} className="text-gray-400 hover:text-gray-600 text-2xl leading-none">&times;</button>
+                  </div>
+                  <p className="text-gray-600 mb-4">Please enter your Google AI Gemini API key. It will be stored in session storage and used for script and audio generation.</p>
+                  <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener noreferrer" className="text-sm text-purple-600 hover:underline mb-4 block">Get your API key from Google AI Studio</a>
+                  <div className="space-y-4">
+                      <input 
+                        type="password" 
+                        value={tempApiKey}
+                        onChange={(e) => setTempApiKey(e.target.value)}
+                        placeholder="Enter your Gemini API Key" 
+                        className="w-full p-3 rounded-md border border-gray-300 focus:ring-2 focus:ring-purple-400 transition" 
+                      />
+                      <button onClick={handleSaveApiKey} className="w-full px-5 py-3 rounded-lg bg-gradient-to-r from-purple-600 to-pink-500 text-white font-bold shadow-lg hover:shadow-xl transition-all">
+                          Save and Continue
+                      </button>
+                  </div>
+              </div>
+          </div>
+      )}
       
       {isBuyCreditsModalOpen && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4" onClick={() => setIsBuyCreditsModalOpen(false)}>
