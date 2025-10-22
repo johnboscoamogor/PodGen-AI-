@@ -1,0 +1,5 @@
+{
+  "name": "PodGen AI",
+  "description": "Generate a full AI-powered podcast video from two host images and a single prompt. Describe your scene and tone, and let AI create the rest.",
+  "requestFramePermissions": []
+}
