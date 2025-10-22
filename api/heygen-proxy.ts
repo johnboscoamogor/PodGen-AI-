@@ -1,16 +1,17 @@
 // This Vercel Serverless Function acts as a secure proxy to the HeyGen API.
 // It should be placed in the `api` directory at the root of your project.
+// It now uses Vercel Blob storage to temporarily host the generated audio.
 //
 // How to use:
 // 1. Place this file at `api/heygen-proxy.ts`.
 // 2. Add your HeyGen API key as an environment variable in your Vercel project settings.
 //    The variable name must be `HEYGEN_API_KEY`.
-// 3. The frontend application will automatically call this function when you
-//    select the "HeyGen (via Vercel Backend)" option.
-//
-// NOTE: Video generation can be a long process. This function's timeout is
-// increased to 5 minutes to accommodate polling the HeyGen API. You may need a
-// Vercel Pro plan for timeouts longer than 60 seconds.
+// 3. Make sure Vercel Blob storage is enabled for your project.
+// 4. The frontend application will automatically call this function.
+
+import { put, del } from '@vercel/blob';
+// FIX: Import Buffer to make it available in the Vercel Function's scope.
+import { Buffer } from 'buffer';
 
 // This config tells Vercel to increase the maximum duration of this function.
 export const config = {
@@ -62,41 +63,50 @@ const pollVideoStatus = async (videoId: string, apiKey: string): Promise<string>
 };
 
 export default async function handler(req: Request) {
-    // Handle CORS preflight request
     if (req.method === 'OPTIONS') {
         return new Response('ok', {
             headers: {
-                'Access-Control-Allow-Origin': '*',
-                'Access-Control-Allow-Methods': 'POST, OPTIONS',
-                'Access-Control-Allow-Headers': 'Content-Type',
+                'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'POST, OPTIONS', 'Access-Control-Allow-Headers': 'Content-Type',
             }
         });
     }
 
     if (req.method !== 'POST') {
         return new Response(JSON.stringify({ error: 'Method not allowed' }), {
-            status: 405,
-            headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' },
+            status: 405, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' },
         });
     }
 
+    let publicAudioUrl = '';
+
     try {
-        const { imageBase64, audioUrl } = await req.json();
+        const { imageBase64, audioBase64 } = await req.json();
         const apiKey = process.env.HEYGEN_API_KEY;
 
         if (!apiKey) {
-             return new Response(JSON.stringify({ error: 'HeyGen API key is not configured on the server. Please set the HEYGEN_API_KEY environment variable in your Vercel project.' }), {
-                status: 500,
-                headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' },
+             return new Response(JSON.stringify({ error: 'HeyGen API key is not configured. Set HEYGEN_API_KEY in Vercel environment variables.' }), {
+                status: 500, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' },
             });
         }
+        if (!process.env.BLOB_READ_WRITE_TOKEN) {
+            return new Response(JSON.stringify({ error: 'Vercel Blob storage is not configured. Please enable it for your project.' }), {
+               status: 500, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' },
+           });
+       }
 
-        if (!imageBase64 || !audioUrl) {
-            return new Response(JSON.stringify({ error: 'Missing imageBase64 or audioUrl' }), {
-                status: 400,
-                headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' },
+        if (!imageBase64 || !audioBase64) {
+            return new Response(JSON.stringify({ error: 'Missing imageBase64 or audioBase64' }), {
+                status: 400, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' },
             });
         }
+        
+        // Step 0: Upload audio to a public URL using Vercel Blob
+        const audioBuffer = Buffer.from(audioBase64, 'base64');
+        const audioBlob = await put(`podcast-audio-${Date.now()}.wav`, audioBuffer, {
+            access: 'public',
+            contentType: 'audio/wav',
+        });
+        publicAudioUrl = audioBlob.url;
 
         // Step 1: Create Avatar from image
         const avatarResponse = await fetch(`${HEYGEN_API_BASE_URL}/avatar/from_image`, {
@@ -118,9 +128,9 @@ export default async function handler(req: Request) {
             body: JSON.stringify({
                 video_inputs: [{
                     character: { type: 'avatar', avatar_id: avatarId, avatar_style: 'normal' },
-                    voice: { type: 'audio', audio_url: audioUrl }
+                    voice: { type: 'audio', audio_url: publicAudioUrl }
                 }],
-                test: true, // Use test mode for development
+                test: true,
                 dimension: { width: 1280, height: 720 }
             }),
         });
@@ -135,15 +145,22 @@ export default async function handler(req: Request) {
         const finalVideoUrl = await pollVideoStatus(videoId, apiKey);
 
         return new Response(JSON.stringify({ videoUrl: finalVideoUrl }), {
-            status: 200,
-            headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' },
+            status: 200, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' },
         });
 
     } catch (error: any) {
         console.error('Error in Vercel function:', error);
         return new Response(JSON.stringify({ error: error.message }), {
-            status: 500,
-            headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' },
+            status: 500, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' },
         });
+    } finally {
+        // Step 4: Clean up the uploaded audio file from Vercel Blob
+        if (publicAudioUrl) {
+            try {
+                await del(publicAudioUrl);
+            } catch (cleanupError) {
+                console.error('Failed to clean up audio blob:', cleanupError);
+            }
+        }
     }
 }

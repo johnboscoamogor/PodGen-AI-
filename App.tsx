@@ -10,6 +10,15 @@ const fileToBase64 = (file: File): Promise<string> =>
     reader.onerror = (error) => reject(error);
   });
 
+const blobToBase64 = (blob: Blob): Promise<string> =>
+  new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.readAsDataURL(blob);
+    reader.onload = () => resolve((reader.result as string).split(',')[1]);
+    reader.onerror = (error) => reject(error);
+  });
+
+
 // Helper functions for TTS Audio processing
 function decode(base64: string): Uint8Array {
   const binaryString = atob(base64);
@@ -102,6 +111,7 @@ export default function App() {
   const [isGeneratingScript, setIsGeneratingScript] = useState(false);
   const [isGeneratingAudio, setIsGeneratingAudio] = useState(false);
   const [generatedAudioUrl, setGeneratedAudioUrl] = useState('');
+  const [generatedAudioBlob, setGeneratedAudioBlob] = useState<Blob | null>(null);
   
   // Voice selection state
   const [maleVoice, setMaleVoice] = useState('Kore');
@@ -206,6 +216,7 @@ export default function App() {
     if (file) {
       setSourceFile(file);
       setGeneratedAudioUrl(''); // Reset previous audio
+      setGeneratedAudioBlob(null);
     }
   };
 
@@ -262,6 +273,7 @@ export default function App() {
 
       setIsGeneratingAudio(true);
       setGeneratedAudioUrl('');
+      setGeneratedAudioBlob(null);
 
       try {
           const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
@@ -270,6 +282,7 @@ export default function App() {
           if (sourceType === 'generate') {
               transcript = sourceScript;
           } else {
+              // Note: Upload/URL audio transcription is not implemented, using sample for demo
               transcript = sampleScriptText;
           }
           
@@ -297,7 +310,8 @@ export default function App() {
               const pcmData = new Int16Array(decodedBytes.buffer);
               const wavBlob = pcmToWav(pcmData, 24000, 1);
               const audioUrl = URL.createObjectURL(wavBlob);
-              setGeneratedAudioUrl(audioUrl);
+              setGeneratedAudioBlob(wavBlob); // Save the blob
+              setGeneratedAudioUrl(audioUrl); // Save the URL for local preview
           } else {
               throw new Error("Audio generation failed, no data received.");
           }
@@ -314,10 +328,7 @@ export default function App() {
       }
   };
 
-  const generateHeyGenVideo = async (hostImage: ImageFile, audioUrl: string): Promise<string> => {
-    // This function calls the Vercel backend to generate a video with HeyGen.
-    // NOTE: This implementation uses the first host image for simplicity.
-    // A production system might generate videos for both hosts and stitch them together.
+  const generateHeyGenVideo = async (hostImage: ImageFile, audioBase64: string): Promise<string> => {
     let progress = 5;
     const progressUpdater = setInterval(() => {
         progress = Math.min(progress + 5, 95);
@@ -332,7 +343,7 @@ export default function App() {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 imageBase64: hostImage.base64,
-                audioUrl: audioUrl,
+                audioBase64: audioBase64,
             }),
         });
 
@@ -367,11 +378,7 @@ export default function App() {
       alert("Please enter a prompt to describe your scene for the Veo model.");
       return;
     }
-    if (videoEngine === 'HEYGEN') {
-        // NOTE: The user must have deployed the Vercel function and set the
-        // HEYGEN_API_KEY environment variable in their Vercel project.
-    }
-    if (!generatedAudioUrl) {
+    if (!generatedAudioUrl || !generatedAudioBlob) {
       alert("Please generate and preview the podcast audio first.");
       return;
     }
@@ -390,7 +397,9 @@ export default function App() {
       let finalVideoUrl = "";
 
       if (videoEngine === 'HEYGEN') {
-          finalVideoUrl = await generateHeyGenVideo(maleImage, generatedAudioUrl);
+          const audioBase64 = await blobToBase64(generatedAudioBlob);
+          // NOTE: This implementation uses the first host image for simplicity.
+          finalVideoUrl = await generateHeyGenVideo(maleImage, audioBase64);
       } else {
           // Use Gemini Veo API
           const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
@@ -455,7 +464,7 @@ export default function App() {
     } finally {
         setIsGenerating(false);
     }
-}, [isKeySelected, maleImage, femaleImage, prompt, projectName, history.length, generatedAudioUrl, credits, estimatedCost, audioDuration, videoEngine]);
+}, [isKeySelected, maleImage, femaleImage, prompt, projectName, history.length, generatedAudioUrl, generatedAudioBlob, credits, estimatedCost, audioDuration, videoEngine]);
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-pink-50 via-purple-50 to-yellow-50 p-4 sm:p-6 font-sans">
