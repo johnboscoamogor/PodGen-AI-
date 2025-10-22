@@ -61,7 +61,7 @@ const POLLING_MESSAGES = {
     "Rendering video, this can take a few minutes...",
   ],
   HEYGEN: [
-    "Contacting secure backend...",
+    "Contacting Vercel backend...",
     "Backend is creating host avatar...",
     "Backend is generating video...",
     "Backend is polling for completion...",
@@ -116,13 +116,6 @@ export default function App() {
   // Video generation engine state
   const [videoEngine, setVideoEngine] = useState<'VEO' | 'HEYGEN'>('HEYGEN');
 
-  // Backend settings state
-  const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
-  const [supabaseUrl, setSupabaseUrl] = useState('');
-  const [heygenApiKey, setHeygenApiKey] = useState('');
-  const [areSettingsSaved, setAreSettingsSaved] = useState(false);
-
-
   const fileInputMale = useRef<HTMLInputElement>(null);
   const fileInputFemale = useRef<HTMLInputElement>(null);
   const fileInputSource = useRef<HTMLInputElement>(null);
@@ -134,14 +127,6 @@ export default function App() {
     } else {
       setCredits(10.0);
       localStorage.setItem('podgen_credits', '10.0');
-    }
-
-    const savedSupabaseUrl = localStorage.getItem('podgen_supabaseUrl');
-    const savedHeygenKey = localStorage.getItem('podgen_heygenApiKey');
-    if (savedSupabaseUrl && savedHeygenKey) {
-        setSupabaseUrl(savedSupabaseUrl);
-        setHeygenApiKey(savedHeygenKey);
-        setAreSettingsSaved(true);
     }
   }, []);
 
@@ -206,17 +191,6 @@ export default function App() {
         console.error("Error opening API key selection:", error);
         alert("Could not open the API key selector. Please try again.");
     }
-  };
-
-  const handleSaveSettings = () => {
-    if (!supabaseUrl.trim() || !heygenApiKey.trim()) {
-        alert("Please provide both a Supabase Function URL and a HeyGen API Key.");
-        return;
-    }
-    localStorage.setItem('podgen_supabaseUrl', supabaseUrl);
-    localStorage.setItem('podgen_heygenApiKey', heygenApiKey);
-    setAreSettingsSaved(true);
-    setIsSettingsModalOpen(false);
   };
 
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>, setter: React.Dispatch<React.SetStateAction<ImageFile | null>>) => {
@@ -341,7 +315,7 @@ export default function App() {
   };
 
   const generateHeyGenVideo = async (hostImage: ImageFile, audioUrl: string): Promise<string> => {
-    // This function calls the Supabase backend to generate a video with HeyGen.
+    // This function calls the Vercel backend to generate a video with HeyGen.
     // NOTE: This implementation uses the first host image for simplicity.
     // A production system might generate videos for both hosts and stitch them together.
     let progress = 5;
@@ -353,13 +327,12 @@ export default function App() {
     }, 2000);
 
     try {
-        const response = await fetch(supabaseUrl, {
+        const response = await fetch('/api/heygen-proxy', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 imageBase64: hostImage.base64,
                 audioUrl: audioUrl,
-                apiKey: heygenApiKey,
             }),
         });
 
@@ -394,10 +367,9 @@ export default function App() {
       alert("Please enter a prompt to describe your scene for the Veo model.");
       return;
     }
-    if (videoEngine === 'HEYGEN' && !areSettingsSaved) {
-        alert("Please configure your Backend Settings (Supabase URL & HeyGen Key) before generating.");
-        setIsSettingsModalOpen(true);
-        return;
+    if (videoEngine === 'HEYGEN') {
+        // NOTE: The user must have deployed the Vercel function and set the
+        // HEYGEN_API_KEY environment variable in their Vercel project.
     }
     if (!generatedAudioUrl) {
       alert("Please generate and preview the podcast audio first.");
@@ -418,7 +390,6 @@ export default function App() {
       let finalVideoUrl = "";
 
       if (videoEngine === 'HEYGEN') {
-          // Use the real HeyGen API via Supabase Backend
           finalVideoUrl = await generateHeyGenVideo(maleImage, generatedAudioUrl);
       } else {
           // Use Gemini Veo API
@@ -476,7 +447,7 @@ export default function App() {
 
     } catch (error: any) {
         console.error("Video generation failed:", error);
-        alert(`An error occurred during video generation: ${error.message}`);
+        alert(`An error occurred during video generation: ${error.message}. If using HeyGen, ensure your Vercel function is deployed and the HEYGEN_API_KEY is set.`);
         if (error.message?.includes("Requested entity was not found")) {
             setIsKeySelected(false);
             alert("Your API key is invalid. Please select a valid key.");
@@ -484,7 +455,7 @@ export default function App() {
     } finally {
         setIsGenerating(false);
     }
-}, [isKeySelected, maleImage, femaleImage, prompt, projectName, history.length, generatedAudioUrl, credits, estimatedCost, audioDuration, videoEngine, areSettingsSaved, supabaseUrl, heygenApiKey]);
+}, [isKeySelected, maleImage, femaleImage, prompt, projectName, history.length, generatedAudioUrl, credits, estimatedCost, audioDuration, videoEngine]);
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-pink-50 via-purple-50 to-yellow-50 p-4 sm:p-6 font-sans">
@@ -498,9 +469,6 @@ export default function App() {
             </div>
           </div>
           <div className="flex items-center gap-3">
-             <button onClick={() => setIsSettingsModalOpen(true)} title="Configure Backend Settings" className={`w-10 h-10 flex items-center justify-center rounded-lg transition-all duration-300 ${areSettingsSaved ? 'bg-green-100 text-green-700' : 'bg-white shadow hover:shadow-md'}`}>
-                <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
-             </button>
              <button onClick={handleSelectKey} className={`px-4 py-2 rounded-lg font-semibold transition-all duration-300 ${isKeySelected ? 'bg-green-100 text-green-700' : 'bg-white shadow hover:shadow-md'}`}>
                 {isKeySelected ? 'API Key Selected' : 'Select API Key'}
             </button>
@@ -640,7 +608,7 @@ export default function App() {
                   <div>
                       <label htmlFor="video-engine" className="text-sm font-medium text-gray-700">Video Generation Engine</label>
                       <select id="video-engine" value={videoEngine} onChange={(e) => setVideoEngine(e.target.value as 'VEO' | 'HEYGEN')} className="w-full p-2 mt-1 rounded-md border border-gray-300 focus:ring-2 focus:ring-purple-400 transition">
-                          <option value="HEYGEN">HeyGen (via Backend)</option>
+                          <option value="HEYGEN">HeyGen (via Vercel Backend)</option>
                           <option value="VEO">Gemini Veo</option>
                       </select>
                   </div>
@@ -661,7 +629,7 @@ export default function App() {
                     {videoEngine === 'VEO' ? (
                         <a href="https://ai.google.dev/gemini-api/docs/billing" target="_blank" rel="noopener noreferrer" className="ml-auto text-sm text-gray-500 hover:text-purple-600 underline">Veo requires billing</a>
                     ) : (
-                        <p className="ml-auto text-sm text-gray-500">Powered by HeyGen API (via Backend)</p>
+                        <p className="ml-auto text-sm text-gray-500">Powered by HeyGen API (via Vercel)</p>
                     )}
                   </div>
                 </div>
@@ -721,33 +689,6 @@ export default function App() {
         <footer className="mt-8 text-center text-sm text-gray-600">© {new Date().getFullYear()} PodGen AI — Made with 🎧 + ⚡️</footer>
       </div>
       
-      {isSettingsModalOpen && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4" onClick={() => setIsSettingsModalOpen(false)}>
-          <div className="bg-white rounded-xl shadow-2xl p-6 sm:p-8 w-full max-w-lg" onClick={e => e.stopPropagation()}>
-            <div className="flex justify-between items-start mb-4">
-              <h2 className="text-2xl font-extrabold text-gray-800">Backend Settings</h2>
-              <button onClick={() => setIsSettingsModalOpen(false)} className="text-gray-400 hover:text-gray-600 text-2xl leading-none">&times;</button>
-            </div>
-            <p className="text-gray-600 mb-6">Configure the application to use your own HeyGen API Key via a secure Supabase Edge Function. These settings are stored locally in your browser.</p>
-            <div className="space-y-4">
-              <div>
-                <label htmlFor="supabase-url" className="text-sm font-medium text-gray-700">Supabase HeyGen Function URL</label>
-                <input id="supabase-url" value={supabaseUrl} onChange={e => setSupabaseUrl(e.target.value)} placeholder="https://<project-ref>.supabase.co/functions/v1/heygen-proxy" className="w-full p-2 mt-1 rounded-md border border-gray-300 focus:ring-2 focus:ring-purple-400 transition" />
-              </div>
-              <div>
-                <label htmlFor="heygen-key" className="text-sm font-medium text-gray-700">HeyGen API Key</label>
-                <input id="heygen-key" type="password" value={heygenApiKey} onChange={e => setHeygenApiKey(e.target.value)} placeholder="Your secret HeyGen API key" className="w-full p-2 mt-1 rounded-md border border-gray-300 focus:ring-2 focus:ring-purple-400 transition" />
-              </div>
-            </div>
-            <div className="mt-6 flex justify-end">
-              <button onClick={handleSaveSettings} className="px-5 py-2 rounded-lg bg-purple-600 text-white font-bold shadow-lg hover:bg-purple-700 transition-all">
-                Save Settings
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
       {isBuyCreditsModalOpen && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4" onClick={() => setIsBuyCreditsModalOpen(false)}>
           <div className="bg-white rounded-xl shadow-2xl p-6 sm:p-8 w-full max-w-md" onClick={e => e.stopPropagation()}>
