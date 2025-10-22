@@ -177,8 +177,13 @@ export default function App() {
 
   useEffect(() => {
     const checkApiKey = async () => {
-      if (window.aistudio && await window.aistudio.hasSelectedApiKey()) {
-        setIsKeySelected(true);
+      try {
+        if (window.aistudio && (await window.aistudio.hasSelectedApiKey())) {
+          setIsKeySelected(true);
+        }
+      } catch (e) {
+        console.error("Failed to check for API key:", e);
+        setIsKeySelected(false);
       }
     };
     checkApiKey();
